@@ -1,0 +1,25 @@
+meta {
+  name: IMDb Suggestion CDN (No Key Required)
+  type: http
+  seq: 4
+}
+
+get {
+  url: https://v3.sg.media-imdb.com/suggestion/titles/:firstChar/:imdbId.json
+  body: none
+  auth: none
+}
+
+params:path {
+  firstChar: 0
+  imdbId: tt0114709
+}
+
+docs {
+  # IMDb Suggestion CDN
+  Lấy thông tin nhanh, năm phát hành, diễn viên chính và URL poster chính thức từ CDN của IMDb.
+  - Hoàn toàn miễn phí, không cần API key.
+  - Không bị chặn bởi AWS WAF.
+  - Lưu ý: :firstChar là ký tự thứ 3 trong mã IMDb (ví dụ: tt0114709 -> firstChar là 0).
+}
+

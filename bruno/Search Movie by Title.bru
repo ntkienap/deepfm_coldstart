@@ -1,0 +1,24 @@
+meta {
+  name: Search Movie by Title
+  type: http
+  seq: 3
+}
+
+get {
+  url: {{baseUrl}}/search/movie?api_key={{apiKey}}&query=Toy Story&language=en-US&page=1
+  body: none
+  auth: none
+}
+
+params:query {
+  api_key: {{apiKey}}
+  query: Toy Story
+  language: en-US
+  page: 1
+}
+
+docs {
+  # Search Movie by Title
+  Tìm kiếm phim theo tên khi không có sẵn ID.
+}
+

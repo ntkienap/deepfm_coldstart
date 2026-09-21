@@ -1,0 +1,74 @@
+# ==========================================
+# 1. PYTHON RUNTIME & CACHE
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+tempCodeRunnerFile.py
+
+# ==========================================
+# 2. HEAVY DATASETS & RAW FILES (>100MB)
+# ==========================================
+# MovieLens raw datasets (ratings.csv 647MB, genome-scores 416MB)
+movielens/ml-100k/
+movielens/ml-1M/
+movielens/ml-1m/
+movielens/ml-10M100K/
+movielens/ml-20m/
+movielens/ml-25m/
+
+# Processed dataset files (binary .pd, .dset)
+dataset/
+MovieTweeting/ratings.dat
+
+# ==========================================
+# 3. IMAGES & CROPPED ASSETS (GBs)
+# ==========================================
+image_orgin/
+image_origin
+image_crop/
+image_resize/
+
+# ==========================================
+# 4. EXTRACTED FEATURES & MODEL PREDICTIONS
+# ==========================================
+# Feature vectors (15 GB)
+feature/
+*.ResNet50
+*.VGG19
+*.bow
+*.finish
+
+# Model predictions & evaluation plots
+prediction_all/
+evaluation/
+result_evaluation/
+hist/
+hyperparams/
+
+
+# ==========================================
+# 5. SECRETS & ENVIRONMENT VARIABLES
+# ==========================================
+.env
+.env.*
+bruno/environments/*
+!bruno/environments/*.example.bru
+
+# ==========================================
+# 6. IDE & SYSTEM FILES
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+*.log
+*.backup.*
+*_backup.*

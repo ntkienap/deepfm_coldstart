@@ -1,0 +1,28 @@
+meta {
+  name: Find Movie by IMDb ID
+  type: http
+  seq: 2
+}
+
+get {
+  url: {{baseUrl}}/find/:imdbId?api_key={{apiKey}}&external_source=imdb_id
+  body: none
+  auth: none
+}
+
+params:query {
+  api_key: {{apiKey}}
+  external_source: imdb_id
+}
+
+params:path {
+  imdbId: tt0114709
+}
+
+docs {
+  # Find Movie by IMDb ID
+  Tra cứu metadata bộ phim thông qua mã IMDb ID (ví dụ `tt0114709` cho Toy Story).
+  
+  Rất hữu ích khi bạn có danh sách mã phim từ file `links.csv` (MovieLens) hoặc `movies.dat` (MovieTweeting).
+}
+

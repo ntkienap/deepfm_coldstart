@@ -1,0 +1,34 @@
+meta {
+  name: Get Movie Details (Full Metadata)
+  type: http
+  seq: 1
+}
+
+get {
+  url: {{baseUrl}}/movie/:movieId?api_key={{apiKey}}&append_to_response=credits,keywords,release_dates,videos&language=en-US
+  body: none
+  auth: none
+}
+
+params:query {
+  api_key: {{apiKey}}
+  append_to_response: credits,keywords,release_dates,videos
+  language: en-US
+}
+
+params:path {
+  movieId: 862
+}
+
+docs {
+  # Get Movie Full Metadata
+  Lấy toàn bộ metadata chi tiết của một bộ phim bằng TMDB ID (ví dụ `862` cho Toy Story).
+  
+  Dữ liệu trả về bao gồm:
+  - **Thông tin cơ bản**: title, original_title, overview, tagline, runtime, release_date, genres
+  - **Đặc trưng số liệu**: budget, revenue, popularity, vote_average, vote_count
+  - **Đặc trưng phân loại**: production_companies, production_countries, spoken_languages, belongs_to_collection
+  - **Credits (Đoàn làm phim)**: Đạo diễn (Director), Biên kịch, Dàn diễn viên (Cast: Tom Hanks, Tim Allen...)
+  - **Keywords (Từ khóa chủ đề)**: rescue, friendship, rivalry, jealousy, toys...
+  - **Media**: poster_path, backdrop_path, videos (trailer YouTube)
+}
