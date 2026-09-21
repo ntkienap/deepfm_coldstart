@@ -50,7 +50,8 @@ evaluation/
 result_evaluation/
 hist/
 hyperparams/
-
+model/
+*.pkl
 
 # ==========================================
 # 5. SECRETS & ENVIRONMENT VARIABLES
