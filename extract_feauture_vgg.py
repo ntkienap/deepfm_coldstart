@@ -92,6 +92,25 @@ class OnlineFiveCropDataset(Dataset):
             return torch.zeros(5, 3, 224, 224), stem, False
 
 
+class SingleImageDataset(Dataset):
+    """Loads a single resized or origin image and resizes it to 224x224 (Approach 3: Resize)."""
+    def __init__(self, image_items, transform):
+        self.image_items = image_items
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.image_items)
+
+    def __getitem__(self, idx):
+        path, movie_id = self.image_items[idx]
+        try:
+            with Image.open(path) as img:
+                tensor = self.transform(img.convert("RGB"))
+                return tensor, movie_id, True
+        except Exception:
+            return torch.zeros(3, 224, 224), movie_id, False
+
+
 def get_single_transform():
     return transforms.Compose([
         transforms.Resize((224, 224), interpolation=transforms.InterpolationMode.BILINEAR),
@@ -219,10 +238,60 @@ def extract_online_five_crop(model, dataloader, device, out_dir, finish_file, po
     print(f"Finished {pooling_name}: {processed_movies} movies ({total_crops} crops) in {elapsed:.2f}s ({processed_movies / max(elapsed, 0.001):.1f} movies/s)")
 
 
+def extract_from_single_resize(model, dataloader, device, out_dir, finish_file, pooling_name, total_items):
+    """Inference for single resized image per movie (Approach 3: Resize)."""
+    out_path = Path(out_dir)
+    out_path.mkdir(parents=True, exist_ok=True)
+    finish_path = Path(finish_file)
+    finish_path.parent.mkdir(parents=True, exist_ok=True)
+
+    # Also track in finish_resize for backward compatibility with old scripts
+    finish_resize_path = finish_path.parent / f"{finish_path.name}_resize"
+
+    print(f"\n--- Extracting VGG19 ({pooling_name.upper()}) from SINGLE RESIZED IMAGES ---")
+    start_time = time.time()
+    processed_count = 0
+    pbar = tqdm(total=total_items, desc=f"VGG19 Resize ({pooling_name})", unit="img") if tqdm else None
+    finish_handle = open(finish_path, "a", encoding="utf-8")
+    finish_resize_handle = open(finish_resize_path, "a", encoding="utf-8")
+
+    try:
+        with torch.no_grad():
+            for batch_imgs, batch_ids, batch_valids in dataloader:
+                batch_imgs = batch_imgs.to(device, non_blocking=True)
+                feats = model(batch_imgs).cpu().numpy()
+
+                for i in range(len(batch_ids)):
+                    if not batch_valids[i]:
+                        continue
+                    mid = batch_ids[i]
+                    feat = feats[i]
+
+                    feat_file = out_path / f"{mid}.VGG19"
+                    feat_str = ",".join([f"{v:.6f}" for v in feat])
+                    with open(feat_file, "w", encoding="utf-8") as f:
+                        f.write(f"{feat_str}\n")
+
+                    finish_handle.write(f"{mid}\n")
+                    finish_resize_handle.write(f"{mid}\n")
+                    processed_count += 1
+
+                if pbar:
+                    pbar.update(len(batch_ids))
+    finally:
+        finish_handle.close()
+        finish_resize_handle.close()
+        if pbar:
+            pbar.close()
+
+    elapsed = time.time() - start_time
+    print(f"Finished {pooling_name}: {processed_count} images in {elapsed:.2f}s ({processed_count / max(elapsed, 0.001):.1f} imgs/s)")
+
+
 def main():
-    parser = argparse.ArgumentParser(description="High-Speed GPU VGG19 Feature Extraction (Approaches 1 & 2)")
-    parser.add_argument("--source", choices=["auto", "fivecrop", "crop"], default="auto",
-                        help="'fivecrop'=Online 5-crop in RAM/GPU (Approach 1); 'crop'=from image_crop on disk (Approach 2); 'auto'=automatic")
+    parser = argparse.ArgumentParser(description="High-Speed GPU VGG19 Feature Extraction (Approaches 1, 2 & 3)")
+    parser.add_argument("--source", choices=["auto", "fivecrop", "crop", "resize"], default="auto",
+                        help="'fivecrop'=Online 5-crop in RAM/GPU (Approach 1); 'crop'=from image_crop on disk (Approach 2); 'resize'=single resized image (Approach 3); 'auto'=automatic")
     parser.add_argument("--batch-size", type=int, default=128, help="Batch size for GPU inference (default: 128)")
     parser.add_argument("--workers", type=int, default=8, help="DataLoader workers (default: 8)")
     parser.add_argument("--pooling", choices=["avg", "max", "both"], default="both", help="Pooling layer type")
@@ -305,7 +374,7 @@ def main():
             if device.type == "cuda":
                 torch.cuda.empty_cache()
 
-    else:
+    elif mode == "crop":
         all_crop_images = sorted(list(crop_dir.glob("*.jpg")))
         if args.limit:
             all_crop_images = all_crop_images[:args.limit]
@@ -347,6 +416,62 @@ def main():
             model.eval()
 
             extract_from_disk_crops(
+                model=model,
+                dataloader=dataloader,
+                device=device,
+                out_dir=out_dir,
+                finish_file=finish_file,
+                pooling_name=pool,
+                total_items=len(filtered)
+            )
+
+            del model
+            if device.type == "cuda":
+                torch.cuda.empty_cache()
+
+    elif mode == "resize":
+        resize_dir = Path(PATH_IMAGE_RESIZE)
+        if resize_dir.exists() and any(resize_dir.glob("*.jpg")):
+            source_folder = resize_dir
+        else:
+            source_folder = origin_dir
+
+        all_images = sorted(list(source_folder.glob("*.jpg")))
+        if args.limit:
+            all_images = all_images[:args.limit]
+
+        image_items = [(str(p), p.stem) for p in all_images]
+        print(f"Found {len(image_items)} images in {source_folder} for single-resize extraction.")
+
+        for pool in poolings_to_run:
+            out_dir = PATH_FEATURE_AVG if pool == "avg" else PATH_FEATURE_MAX
+            finish_file = PATH_FEATURE_AVG_FINISH if pool == "avg" else PATH_FEATURE_MAX_FINISH
+
+            if not args.force:
+                out_path = Path(out_dir)
+                existing = {f.stem for f in out_path.glob("*.VGG19") if "_" not in f.stem}
+                filtered = [item for item in image_items if item[1] not in existing]
+                print(f"[{pool.upper()}] {len(existing)} single resized features already exist. {len(filtered)} remaining.")
+            else:
+                filtered = image_items
+
+            if not filtered:
+                print(f"[{pool.upper()}] All single resized features already extracted.")
+                continue
+
+            dataset = SingleImageDataset(filtered, get_single_transform())
+            dataloader = DataLoader(
+                dataset,
+                batch_size=args.batch_size,
+                shuffle=False,
+                num_workers=args.workers,
+                pin_memory=(device.type == "cuda")
+            )
+
+            model = VGG19FeatureExtractor(pooling=pool).to(device)
+            model.eval()
+
+            extract_from_single_resize(
                 model=model,
                 dataloader=dataloader,
                 device=device,
