@@ -9,10 +9,16 @@ from collections import defaultdict
 
 # from sklearn.preprocessing import minmax_scale
 
+import os
 from sklearn.metrics import roc_auc_score
-from recommenders.utils.spark_utils import start_or_get_spark
-from recommenders.evaluation.spark_evaluation import SparkRankingEvaluation
 from recommenders.evaluation.python_evaluation import precision_at_k, recall_at_k, auc, logloss
+
+try:
+    from recommenders.utils.spark_utils import start_or_get_spark
+    from recommenders.evaluation.spark_evaluation import SparkRankingEvaluation
+except Exception:
+    start_or_get_spark = None
+    SparkRankingEvaluation = None
 
 
 def _get_header():
@@ -31,6 +37,8 @@ def _get_header():
 
 
 def prepare_dfs(df_true, df_pred):
+    if start_or_get_spark is None:
+        raise ImportError("SparkRankingEvaluation is not available in current environment.")
     spark = start_or_get_spark("EvaluationTesting", "local")
     dfs_true = spark.createDataFrame(df_true)
     dfs_pred = spark.createDataFrame(df_pred)
@@ -38,12 +46,14 @@ def prepare_dfs(df_true, df_pred):
 
 
 def precision_recall_model(dfs_true, dfs_pred, k=5, model="VGG19-FM"):
+    if SparkRankingEvaluation is None:
+        raise ImportError("SparkRankingEvaluation is not available in current environment.")
     header = _get_header()
     spark_rank_eval = SparkRankingEvaluation(
         dfs_true, dfs_pred, k=k, relevancy_method="top_k", **header)
     p = spark_rank_eval.precision_at_k()
     r = spark_rank_eval.recall_at_k()
-    f1 = (2 * p * r) / (p + r)
+    f1 = 0 if (p + r == 0) else (2 * p * r) / (p + r)
     return [{"k": k, "model": f"{model}-FM", "precisions": p, "recall": r, "f1": f1}]
 
 
@@ -298,6 +308,7 @@ def precision_recall_f1_at_k(
     num_user = len(userset)
     all_predictions = pd.DataFrame(
         columns=['userID', 'itemID', 'uid', 'iid', 'prediction'])
+    os.makedirs("prediction_all", exist_ok=True)
     if env['isNew']:
         all_predictions.to_csv(
             f"prediction_all/fm_feature({env['FEATURE_NAME']})_new_item_ml-{env['MOVIELENS_SIZE']}_UMR({env['MIN_USER_RATING']}).csv", mode='a', index=False)

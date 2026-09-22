@@ -1,121 +1,98 @@
 import os
-import random
-import pickle
+import argparse
+import itertools
 from pathlib import Path
 import numpy as np
 import pandas as pd
 from lightfm.data import Dataset
-from lightfm.evaluation import precision_at_k
 from lightfm import LightFM
 import support_metric as sp
-import matplotlib.pyplot as plt
-import seaborn as sns
 import support_dataset as spDataset
-import itertools
-from lightfm import LightFM
-from lightfm.evaluation import auc_score
-import support_metric as sp
 
-SIZE_VECTOR = 512
-MOVIELENS_SIZE = "100k"
-
-PATH_FOLDER_DATASET = "dataset"
-PATH_FILE_RATINGS = f"movielens/ml-{MOVIELENS_SIZE}/ratings.dat"
-PATH_FILE_LIGTHFM_MODEL = f"model/ligthfm_with_feature_movielens_{MOVIELENS_SIZE}_VGG16.model"
-
-PATH_TRAIN_DATASET = f"{PATH_FOLDER_DATASET}/train_new_item_ml_{MOVIELENS_SIZE}.pd"
-PATH_TEST_DATASET = f"{PATH_FOLDER_DATASET}/test_new_item_ml_{MOVIELENS_SIZE}.pd"
+DEFAULT_SIZE = os.environ.get("MOVIELENS_SIZE", "25m")
+DEFAULT_MIN_USER_RATING = int(os.environ.get("MIN_USER_RATING", "5"))
 
 
 def sample_hyperparameters():
-    """
-    Yield possible hyperparameter choices.
-    """
-
     while True:
         yield {
             "no_components": np.random.randint(16, 64),
             "learning_schedule": np.random.choice(["adagrad", "adadelta"]),
             "loss": np.random.choice(["bpr", "warp"]),
-            "learning_rate": np.random.exponential(0.05),
-            "item_alpha": np.random.exponential(1e-3),
-            "user_alpha": np.random.exponential(1e-3),
-            "max_sampled": np.random.randint(5, 25),
-            "num_epochs": np.random.randint(50, 150),
+            "learning_rate": float(np.random.exponential(0.05)),
+            "item_alpha": float(np.random.exponential(1e-3)),
+            "user_alpha": float(np.random.exponential(1e-3)),
+            "max_sampled": int(np.random.randint(5, 25)),
+            "num_epochs": int(np.random.randint(30, 80)),
         }
 
 
-def random_search(train, test, num_samples=150, num_threads=8):
-    """
-    Sample random hyperparameters, fit a LightFM model, and evaluate it
-    on the test set.
-
-    Parameters
-    ----------
-
-    train: np.float32 coo_matrix of shape [n_users, n_items]
-        Training data.
-    test: np.float32 coo_matrix of shape [n_users, n_items]
-        Test data.
-    num_samples: int, optional
-        Number of hyperparameter choices to evaluate.
-
-
-    Returns
-    -------
-
-    generator of (auc_score, hyperparameter dict, fitted model)
-
-    """
-
+def random_search(train, test, num_samples=50, num_threads=8, log_file=None):
     for hyperparams in itertools.islice(sample_hyperparameters(), num_samples):
         num_epochs = hyperparams.pop("num_epochs")
-
         model = LightFM(**hyperparams)
         model.fit(train, epochs=num_epochs, num_threads=num_threads)
-
         score = sp.precision_at_k(model, test, k=1)
-
         hyperparams["num_epochs"] = num_epochs
-        print("Score {} at {}".format(score, hyperparams))
-        with open(f"hyperparams/ligthfm_ratings_ml-{MOVIELENS_SIZE}_new_item(-1).txt", "a") as out_hyper:
-            out_hyper.write("Score {} at {}\n".format(score, hyperparams))
+        print("Score {:.4f} at {}".format(score, hyperparams))
+        if log_file:
+            with open(log_file, "a") as out_hyper:
+                out_hyper.write("Score {:.4f} at {}\n".format(score, hyperparams))
         yield (score, hyperparams, model)
 
 
-if __name__ == "__main__":
-    ratings = spDataset.load_movielens_data(PATH_FILE_RATINGS, sep="::")
+def main():
+    parser = argparse.ArgumentParser(description="Optimize Hyperparameters for LightFM Ratings on MovieLens")
+    parser.add_argument("--size", default=DEFAULT_SIZE, help="MovieLens dataset size (default: 25m)")
+    parser.add_argument("--min-user-rating", type=int, default=DEFAULT_MIN_USER_RATING, help="Min user ratings threshold")
+    parser.add_argument("--samples", type=int, default=30, help="Number of random search samples")
+    parser.add_argument("--threads", type=int, default=min(16, os.cpu_count() or 8), help="Threads")
+    args = parser.parse_args()
 
-    if (os.path.exists(PATH_TRAIN_DATASET) and os.path.exists(PATH_TEST_DATASET)):
-        ratings_train = pd.read_pickle(PATH_TRAIN_DATASET)
-        ratings_test = pd.read_pickle(PATH_TEST_DATASET)
+    ml_size = args.size
+    min_user_rating = args.min_user_rating
+
+    Path("dataset").mkdir(parents=True, exist_ok=True)
+    Path("hyperparams").mkdir(parents=True, exist_ok=True)
+
+    path_train_dataset = f"dataset/train_ml-{ml_size}_UMR({min_user_rating}).pd"
+    path_test_dataset = f"dataset/test_ml-{ml_size}_UMR({min_user_rating}).pd"
+    log_file = f"hyperparams/lightfm_ratings_ml-{ml_size}.txt"
+
+    print(f"Loading MovieLens [{ml_size}] with min_user_ratings={min_user_rating}...")
+    ratings = spDataset.load_movielens_data(size=ml_size, min_user_ratings=min_user_rating)
+
+    if os.path.exists(path_train_dataset) and os.path.exists(path_test_dataset):
+        ratings_train = pd.read_pickle(path_train_dataset)
+        ratings_test = pd.read_pickle(path_test_dataset)
     else:
         ratings_train, ratings_test = spDataset.get_train_test_dataset(ratings)
-        Path(PATH_FOLDER_DATASET).mkdir(parents=True, exist_ok=True)
-        ratings_train.to_pickle(PATH_TRAIN_DATASET)
-        ratings_test.to_pickle(PATH_TEST_DATASET)
+        ratings_train.to_pickle(path_train_dataset)
+        ratings_test.to_pickle(path_test_dataset)
 
     dataset = Dataset()
-    dataset.fit(ratings['users'].unique(),
-                ratings['items'].unique())
+    dataset.fit(ratings['userID'].unique(), ratings['itemID'].unique())
 
-    num_users, num_items = dataset.interactions_shape()
-    print('Num users: {}, num_items {}.'.format(num_users, num_items))
+    (interactions_train, weights_train) = dataset.build_interactions(
+        (x['userID'], x['itemID'], x['rating']) for _, x in ratings_train.iterrows()
+    )
+    (interactions_test, weights_test) = dataset.build_interactions(
+        (x['userID'], x['itemID'], x['rating']) for _, x in ratings_test.iterrows()
+    )
 
-    user_id_mapping, _, item_id_mapping, _ = dataset.mapping()
-
-    # if (os.path.exists(PATH_FILE_LIGTHFM_MODEL)):
-    #     model = pickle.load(open(PATH_FILE_LIGTHFM_MODEL, 'rb'))
-    # else:
-    (interactions_train, weights_train) = dataset.build_interactions((x['users'], x['items'], x['ratings'])
-                                                                     for _, x in ratings_train.iterrows())
-    (interactions_test, weights_test) = dataset.build_interactions((x['users'], x['items'], x['ratings'])
-                                                                   for _, x in ratings_test.iterrows())
     train = spDataset.build_positive_data(interactions_train, weights_train)
     test = spDataset.build_positive_data(interactions_test, weights_test)
-    (score, hyperparams, model) = max(random_search(
-        train, test, num_threads=32), key=lambda x: x[0])
-    print("~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~")
-    print("Best score {} at {}".format(score, hyperparams))
-    with open(f"hyperparams/ligthfm_ratings_ml-{MOVIELENS_SIZE}_new_item(-1).txt", "a") as out_hyper:
-        out_hyper.write("** Best score {} at {}\n".format(score, hyperparams))
+
+    best_score, best_hyperparams, best_model = max(
+        random_search(train, test, num_samples=args.samples, num_threads=args.threads, log_file=log_file),
+        key=lambda x: x[0]
+    )
+
+    print("=" * 60)
+    print(f"Best score {best_score:.4f} at {best_hyperparams}")
+    with open(log_file, "a") as out_hyper:
+        out_hyper.write(f"** BEST: Score {best_score:.4f} at {best_hyperparams}\n")
+
+
+if __name__ == "__main__":
+    main()

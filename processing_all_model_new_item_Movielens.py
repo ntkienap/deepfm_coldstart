@@ -1,140 +1,173 @@
-import copy
 import os
+import sys
 import pickle
-import random
+import argparse
+from pathlib import Path
 import numpy as np
 import pandas as pd
 import seaborn as sns
-from pathlib import Path
-from lightfm.data import Dataset as LightFMDataset
-from lightfm import LightFM
-from surprise import Dataset as MFDataset, Reader, SVD
-
-import support_metric as sp
 import matplotlib.pyplot as plt
+from lightfm.data import Dataset as LightFMDataset
+import support_metric as sp
 import support_dataset as spDataset
 
-SIZE_VECTOR = 512
-MOVIELENS_SIZE = "1m"
-MIN_USER_RATING = 50
-FEATURE_NAME = "VGG16"
+DEFAULT_SIZE = os.environ.get("MOVIELENS_SIZE", "25m")
+DEFAULT_MIN_USER_RATING = int(os.environ.get("MIN_USER_RATING", "5"))
+DEFAULT_FEATURE_NAME = os.environ.get("FEATURE_NAME", "VGG19")
+DEFAULT_POOLING = os.environ.get("POOLING", "avg")
 
-PATH_FOLDER_DATASET = "dataset/"
-PATH_FILE_RATINGS = f"movielens/ml-{MOVIELENS_SIZE}/ratings.dat"
 
-PATH_FILE_LIGHTFM_MODEL_FEATURE = f"model/lightfm_with_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).model"
-PATH_FILE_LIGHTFM_MODEL_RATING = f"model/lightfm_with_ratings_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).model"
-PATH_FILE_SVD_MODEL = f"model/mf_svd_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).model"
+def parse_args():
+    parser = argparse.ArgumentParser(description="Evaluate All Models on MovieLens (New Items)")
+    parser.add_argument("--size", default=DEFAULT_SIZE, help="MovieLens dataset size (default: 25m)")
+    parser.add_argument("--min-user-rating", type=int, default=DEFAULT_MIN_USER_RATING, help="Min user ratings threshold (default: 5)")
+    parser.add_argument("--feature", default=DEFAULT_FEATURE_NAME, choices=["VGG19", "ResNet50", "SIFT", "BoW"], help="Feature name (default: VGG19)")
+    parser.add_argument("--size-vector", type=int, default=None, help="Vector dimension")
+    parser.add_argument("--pooling", default=DEFAULT_POOLING, choices=["avg", "max"], help="Pooling (default: avg)")
+    parser.add_argument("--threads", type=int, default=min(16, os.cpu_count() or 8), help="Worker threads")
+    return parser.parse_args()
 
-PATH_TRAIN_DATASET = f"{PATH_FOLDER_DATASET}/train_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).pd"
-PATH_TEST_DATASET = f"{PATH_FOLDER_DATASET}/test_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).pd"
 
-if __name__ == "__main__":
+def main():
+    args = parse_args()
+    ml_size = args.size
+    min_user_rating = args.min_user_rating
+    feature_name = args.feature
+    pooling = args.pooling
 
-    ratings = spDataset.load_movielens_data(
-        PATH_FILE_RATINGS, sep="::", min_user_ratings=MIN_USER_RATING)
-    if (os.path.exists(PATH_TRAIN_DATASET) and os.path.exists(PATH_TEST_DATASET)):
-        ratings_train = pd.read_pickle(PATH_TRAIN_DATASET)
-        ratings_test = pd.read_pickle(PATH_TEST_DATASET)
+    if args.size_vector is not None:
+        size_vector = args.size_vector
     else:
-        ratings_train, ratings_test = spDataset.get_train_test_dataset(ratings)
-        Path(PATH_FOLDER_DATASET).mkdir(parents=True, exist_ok=True)
-        ratings_train.to_pickle(PATH_TRAIN_DATASET)
-        ratings_test.to_pickle(PATH_TEST_DATASET)
+        if "RESNET" in feature_name.upper():
+            size_vector = 2048
+        elif "VGG" in feature_name.upper():
+            size_vector = 512
+        else:
+            size_vector = 64
+
+    path_folder_dataset = "dataset"
+    path_file_lightfm_model_feature = f"model/lightfm_with_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).model"
+    path_file_lightfm_model_rating = f"model/lightfm_with_ratings_new_item_ml-{ml_size}_UMR({min_user_rating}).model"
+    path_file_svd_model = f"model/mf_svd_new_item_ml-{ml_size}_UMR({min_user_rating}).model"
+
+    path_train_dataset = f"{path_folder_dataset}/train_new_item_ml-{ml_size}_UMR({min_user_rating}).pd"
+    path_test_dataset = f"{path_folder_dataset}/test_new_item_ml-{ml_size}_UMR({min_user_rating}).pd"
+
+    for d in [path_folder_dataset, "model", "prediction_all", "result_evaluation", "evaluation"]:
+        Path(d).mkdir(parents=True, exist_ok=True)
+
+    print(f"Loading MovieLens [{ml_size}] (New Item mode, min_user_ratings={min_user_rating})...")
+    ratings = spDataset.load_movielens_data(size=ml_size, min_user_ratings=min_user_rating)
+
+    if os.path.exists(path_train_dataset) and os.path.exists(path_test_dataset):
+        print(f"Loading cached train/test splits from {path_folder_dataset}...")
+        ratings_train = pd.read_pickle(path_train_dataset)
+        ratings_test = pd.read_pickle(path_test_dataset)
+    else:
+        print("Creating new item train/test split...")
+        ratings_train, ratings_test = spDataset.get_train_test_dataset_new_items(ratings)
+        ratings_train.to_pickle(path_train_dataset)
+        ratings_test.to_pickle(path_test_dataset)
+
     dataset = LightFMDataset()
-    dataset.fit(ratings['userID'].unique(),
-                ratings['itemID'].unique(),
-                item_features=[f"f{i+1}" for i in range(SIZE_VECTOR)])
+    dataset.fit(
+        ratings['userID'].unique(),
+        ratings['itemID'].unique(),
+        item_features=[f"f{i+1}" for i in range(size_vector)]
+    )
     user_id_mapping, _, item_id_mapping, _ = dataset.mapping()
 
-    (interactions_train, weights_train) = dataset.build_interactions((x['userID'], x['itemID'], x['rating'])
-                                                                     for _, x in ratings_train.iterrows())
+    (interactions_train, _) = dataset.build_interactions(
+        (x['userID'], x['itemID'], x['rating']) for _, x in ratings_train.iterrows()
+    )
+
+    print("Building visual features for items...")
     item_feature_matching = spDataset.get_image_features(
-        ratings, isTest=True)
-    item_features = dataset.build_item_features(((x[0], x[1])
-                                                 for x in item_feature_matching), normalize=False)
+        ratings, isTest=True, size_vector=size_vector, pooling=pooling, feature_name=feature_name
+    )
+    item_features = dataset.build_item_features(
+        ((x[0], x[1]) for x in item_feature_matching), normalize=False
+    )
 
     num_users, num_items = dataset.interactions_shape()
-    print('Num users: {}, num_items {}.'.format(num_users, num_items))
-    model_feature = pickle.load(
-        open(PATH_FILE_LIGHTFM_MODEL_FEATURE, 'rb'))
-    
-    model_ratings = pickle.load(
-        open(PATH_FILE_LIGHTFM_MODEL_RATING, 'rb'))
-    
-    model_mf = pickle.load(
-        open(PATH_FILE_SVD_MODEL, 'rb'))
-    
-    print("Predict all user-item")
-    test_df = ratings_test[['userID', 'itemID', 'rating']].copy()
-    
-    df_feature_predictions_all = sp.prepare_all_predictions(ratings, uid_map=user_id_mapping, iid_map=item_id_mapping,
-                                                        interactions=interactions_train,
-                                                        model=model_feature, item_features=item_features,
-                                                        num_threads=32)
-    
-    df_ratings_predictions_all = sp.prepare_all_predictions(ratings,  uid_map=user_id_mapping,
-                                                        iid_map=item_id_mapping,
-                                                        interactions=interactions_train,
-                                                        model=model_ratings,
-                                                        num_threads=32)
+    print(f"Num users: {num_users}, Num items: {num_items}.")
 
+    print("Loading models...")
+    assert os.path.exists(path_file_lightfm_model_feature), f"Missing model: {path_file_lightfm_model_feature}"
+    assert os.path.exists(path_file_lightfm_model_rating), f"Missing model: {path_file_lightfm_model_rating}"
+    assert os.path.exists(path_file_svd_model), f"Missing model: {path_file_svd_model}"
+
+    with open(path_file_lightfm_model_feature, 'rb') as f:
+        model_feature = pickle.load(f)
+    with open(path_file_lightfm_model_rating, 'rb') as f:
+        model_ratings = pickle.load(f)
+    with open(path_file_svd_model, 'rb') as f:
+        model_mf = pickle.load(f)
+
+    print("Generating predictions for all models...")
+    test_df = ratings_test[['userID', 'itemID', 'rating']].copy()
+
+    df_feature_predictions_all = sp.prepare_all_predictions(
+        ratings, uid_map=user_id_mapping, iid_map=item_id_mapping,
+        interactions=interactions_train, model=model_feature,
+        item_features=item_features, num_threads=args.threads
+    )
+    df_ratings_predictions_all = sp.prepare_all_predictions(
+        ratings, uid_map=user_id_mapping, iid_map=item_id_mapping,
+        interactions=interactions_train, model=model_ratings,
+        num_threads=args.threads
+    )
     df_mf_predictions_all = sp.prepare_all_predictions_for_mf(
-        ratings, ratings_train, model_mf)
-   
+        ratings, ratings_train, model_mf
+    )
+
+    print("Evaluating Top-K metrics (1 to 20)...")
     evaluation = []
-    x = range(1, 21)
-    for k in x:
-        print(f"Top_k@{k}...............")
+    for k in range(1, 21):
+        print(f"Top_k@{k}...")
         ev = sp.precision_recall_all_model(
-            test_df, df_feature_predictions_all, df_ratings_predictions_all, df_mf_predictions_all, k=k)
-        print(ev)
+            test_df, df_feature_predictions_all, df_ratings_predictions_all, df_mf_predictions_all, k=k
+        )
         evaluation.extend(ev)
 
-    df = pd.DataFrame(evaluation)
-    df.to_csv(
-        f"result_evaluation/all_model_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).csv", index=False)
-    plt.ylim(0, 1)
-    ax = sns.lineplot(
-        data=df,
-        x="recall",  y="precisions", hue="model", style="model", markers=True, dashes=False
-    )
-    ax.set(title='ĐỘ ĐO PRECISION - RECALL')
+    df_eval = pd.DataFrame(evaluation)
+    out_csv = f"result_evaluation/all_model_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).csv"
+    df_eval.to_csv(out_csv, index=False)
 
+    plt.figure()
+    plt.ylim(0, 1)
+    ax = sns.lineplot(data=df_eval, x="recall", y="precisions", hue="model", style="model", markers=True, dashes=False)
+    ax.set(title=f'PRECISION - RECALL (New Items, ml-{ml_size})')
     fig = ax.get_figure()
-    fig.savefig(
-        f"evaluation/precision_recall_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).png")
+    fig.savefig(f"evaluation/precision_recall_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).png")
     plt.close()
 
+    plt.figure()
     plt.ylim(0, 1)
-    ax = sns.lineplot(
-        data=df,
-        x="k",  y="precisions", hue="model", style="model", markers=True, dashes=False
-    )
-    ax.set(title='ĐỘ ĐO PRECISION')
+    ax = sns.lineplot(data=df_eval, x="k", y="precisions", hue="model", style="model", markers=True, dashes=False)
+    ax.set(title=f'PRECISION@K (New Items, ml-{ml_size})')
     fig = ax.get_figure()
-    fig.savefig(
-        f"evaluation/precision_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).png")
+    fig.savefig(f"evaluation/precision_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).png")
     plt.close()
 
+    plt.figure()
     plt.ylim(0, 1)
-    ax = sns.lineplot(
-        data=df,
-        x="k",  y="recall", hue="model", style="model", markers=True, dashes=True
-    )
-    ax.set(title='ĐỘ ĐO RECALL')
+    ax = sns.lineplot(data=df_eval, x="k", y="recall", hue="model", style="model", markers=True, dashes=True)
+    ax.set(title=f'RECALL@K (New Items, ml-{ml_size})')
     fig = ax.get_figure()
-    fig.savefig(
-        f"evaluation/recall_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).png")
+    fig.savefig(f"evaluation/recall_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).png")
     plt.close()
 
+    plt.figure()
     plt.ylim(0, 1)
-    ax = sns.lineplot(
-        data=df,
-        x="k",  y="f1", hue="model", style="model", markers=True, dashes=True
-    )
-    ax.set(title='ĐỘ ĐO F1')
+    ax = sns.lineplot(data=df_eval, x="k", y="f1", hue="model", style="model", markers=True, dashes=True)
+    ax.set(title=f'F1@K (New Items, ml-{ml_size})')
     fig = ax.get_figure()
-    fig.savefig(
-        f"evaluation/f1_feature({FEATURE_NAME})_new_item_ml-{MOVIELENS_SIZE}_UMR({MIN_USER_RATING}).png")
+    fig.savefig(f"evaluation/f1_feature({feature_name})_new_item_ml-{ml_size}_UMR({min_user_rating}).png")
     plt.close()
+
+    print(f"Done! Results saved to {out_csv} and evaluation plots.")
+
+
+if __name__ == "__main__":
+    main()

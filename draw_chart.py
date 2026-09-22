@@ -1,47 +1,61 @@
+import os
+import argparse
+from pathlib import Path
 import pandas as pd
 import numpy as np
 import seaborn as sns
 import matplotlib.pyplot as plt
-MOVIELENS_SIZE = "100k"
-names = ["index", "k", "type", "precisions", "recall", "f1"]
-df = pd.read_csv("result_evaluation/Movielens_100k.csv", header=0, names=names)
-df.drop(columns=["index"], inplace=True)
 
-ax = sns.lineplot(
-    data=df,
-    x="recall",  y="precisions", hue="type", style="type", markers=True, dashes=False,
-)
+DEFAULT_SIZE = os.environ.get("MOVIELENS_SIZE", "25m")
 
-ax.set(title='ĐỘ ĐO PRECISION-RECALL')
 
-plt.xticks([x for x in np.arange(0.6, 1.0, 0.1)])
-plt.yticks([x for x in np.arange(0.6, 1.0, 0.1)])
-plt.savefig(f"evaluation/precision_recall_Movielens_{MOVIELENS_SIZE}.png")
-plt.close()
+def main():
+    parser = argparse.ArgumentParser(description="Draw chart from Movielens summary CSV")
+    parser.add_argument("--size", default=DEFAULT_SIZE, help="MovieLens dataset size (default: 25m)")
+    parser.add_argument("--csv-file", default=None, help="Path to CSV file (defaults to result_evaluation/Movielens_{size}.csv)")
+    args = parser.parse_args()
 
-ax = sns.lineplot(
-    data=df,
-    x="k",  y="precisions", hue="type", style="type", markers=True, dashes=False
-)
-ax.set(title='ĐỘ ĐO PRECISION')
-fig = ax.get_figure()
-fig.savefig(f"evaluation/precision_Movielens_{MOVIELENS_SIZE}.png")
-plt.close()
+    ml_size = args.size
+    csv_file = args.csv_file or f"result_evaluation/Movielens_{ml_size}.csv"
 
-ax = sns.lineplot(
-    data=df,
-    x="k",  y="recall", hue="type", style="type", markers=True, dashes=True
-)
-ax.set(title='ĐỘ ĐO RECALL')
-fig = ax.get_figure()
-fig.savefig(f"evaluation/recall_Movielens_{MOVIELENS_SIZE}.png")
-plt.close()
+    if not os.path.exists(csv_file):
+        print(f"Error: {csv_file} does not exist.")
+        return
 
-ax = sns.lineplot(
-    data=df,
-    x="k",  y="f1", hue="type", style="type", markers=True, dashes=True
-)
-ax.set(title='ĐỘ ĐO F1')
-fig = ax.get_figure()
-fig.savefig(f"evaluation/f1_Movielens_{MOVIELENS_SIZE}.png")
-plt.close()
+    Path("evaluation").mkdir(parents=True, exist_ok=True)
+    names = ["index", "k", "type", "precisions", "recall", "f1"]
+    df = pd.read_csv(csv_file, header=0, names=names)
+    if "index" in df.columns:
+        df.drop(columns=["index"], inplace=True)
+
+    plt.figure()
+    ax = sns.lineplot(data=df, x="recall", y="precisions", hue="type", style="type", markers=True, dashes=False)
+    ax.set(title=f'PRECISION - RECALL (ml-{ml_size})')
+    plt.savefig(f"evaluation/precision_recall_Movielens_{ml_size}.png")
+    plt.close()
+
+    plt.figure()
+    ax = sns.lineplot(data=df, x="k", y="precisions", hue="type", style="type", markers=True, dashes=False)
+    ax.set(title=f'PRECISION (ml-{ml_size})')
+    fig = ax.get_figure()
+    fig.savefig(f"evaluation/precision_Movielens_{ml_size}.png")
+    plt.close()
+
+    plt.figure()
+    ax = sns.lineplot(data=df, x="k", y="recall", hue="type", style="type", markers=True, dashes=True)
+    ax.set(title=f'RECALL (ml-{ml_size})')
+    fig = ax.get_figure()
+    fig.savefig(f"evaluation/recall_Movielens_{ml_size}.png")
+    plt.close()
+
+    plt.figure()
+    ax = sns.lineplot(data=df, x="k", y="f1", hue="type", style="type", markers=True, dashes=True)
+    ax.set(title=f'F1 (ml-{ml_size})')
+    fig = ax.get_figure()
+    fig.savefig(f"evaluation/f1_Movielens_{ml_size}.png")
+    plt.close()
+    print(f"Plots saved to evaluation/ for ml-{ml_size}.")
+
+
+if __name__ == "__main__":
+    main()

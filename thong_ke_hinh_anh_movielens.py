@@ -1,30 +1,40 @@
-import pandas as pd
-import numpy as np
 import os
-import matplotlib.pyplot as plt
-import seaborn as sns
-import cv2
+import argparse
+import pandas as pd
+import support_dataset as spDataset
 
-names = ['userID', 'itemID', 'rating', 'timestamp']
-df = pd.read_csv("MovieTweeting/ratings.dat", sep="::",
-                 engine="python", names=names)
-max = {"width": 0, "height": 0}
-min = None
-co_hinh = 0
-khong_co_hinh = 0
-for iid in df.itemID.unique():
-    path_image = f"/root/Data_LV_CuaDuong/MovieTweeting/image_orgin/{iid}.jpg"
-    if (os.path.exists(path_image)):
-        co_hinh+=1
-    else:
-        khong_co_hinh+=1
-print(co_hinh, khong_co_hinh)
-#         img = cv2.imread(path_image)
-#         if max["height"] * max["width"] < img.shape[0] * img.shape[1]:
-#             max["height"] = img.shape[0]
-#             max["width"] = img.shape[1]
-#         if min is not None and min["height"] * min["width"] > img.shape[0] * img.shape[1]:
-#             min = {"width": img.shape[1], "height": img.shape[0]}
-#         else:
-#             min = {"width": img.shape[1], "height": img.shape[0]}
-# print(max)
+DEFAULT_SIZE = os.environ.get("MOVIELENS_SIZE", "25m")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Statistics of poster images for MovieLens")
+    parser.add_argument("--size", default=DEFAULT_SIZE, help="MovieLens dataset size (default: 25m)")
+    parser.add_argument("--image-dir", default="image_orgin/movielens", help="Directory containing poster images")
+    args = parser.parse_args()
+
+    ml_size = args.size
+    image_dir = args.image_dir
+
+    print(f"Loading MovieLens [{ml_size}]...")
+    df = spDataset.load_movielens_data(size=ml_size)
+    unique_items = df['itemID'].unique()
+    print(f"Total unique items in ratings: {len(unique_items)}")
+
+    has_image = 0
+    missing_image = 0
+    missing_ids = []
+
+    for iid in unique_items:
+        path_image = os.path.join(image_dir, f"{iid}.jpg")
+        if os.path.exists(path_image):
+            has_image += 1
+        else:
+            missing_image += 1
+            missing_ids.append(iid)
+
+    print(f"Items with image:    {has_image} ({has_image / len(unique_items) * 100:.2f}%)")
+    print(f"Items without image: {missing_image} ({missing_image / len(unique_items) * 100:.2f}%)")
+
+
+if __name__ == "__main__":
+    main()
